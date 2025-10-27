@@ -58,6 +58,7 @@ def reply_line(reply_token, messages):
 @app.route("/callback", methods=["POST"])
 def callback():
     data = request.get_json()
+    print("Received:", data)  # 👈 一定要有這行
     events = data.get("events", [])
 
     for event in events:
@@ -67,7 +68,7 @@ def callback():
             user_msg = event["message"]["text"]
 
             # 啟動小遊戲
-            if "品牌診斷小遊戲" in user_msg:
+            if "品牌診斷小遊戲" in user_msg.strip():
                 user_answers[user_id] = {"step": 1, "answers": []}
                 q = questions["Q1"]
                 reply_line(reply_token, [{
