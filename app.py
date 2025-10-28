@@ -1,9 +1,10 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request
 import requests
 import os
+import json
 from dotenv import load_dotenv
 
-# 讀取 .env
+# 載入 .env
 load_dotenv()
 
 app = Flask(__name__)
@@ -32,10 +33,9 @@ questions = {
     }
 }
 
-# 用戶暫存答案
+# 暫存使用者答案
 user_answers = {}
 
-# 計算結果
 def calculate_result(answers):
     score = sum([int(a) for a in answers])
     if score <= 5:
@@ -45,29 +45,29 @@ def calculate_result(answers):
     else:
         return "🌳 穩定品牌", "建議整合行銷與活動合作"
 
-# 回覆 LINE
 def reply_line(reply_token, messages):
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {LINE_TOKEN}"
     }
     data = {"replyToken": reply_token, "messages": messages}
-    requests.post(LINE_API, headers=headers, json=data)
+    res = requests.post(LINE_API, headers=headers, json=data)
+    print("Reply status:", res.status_code, res.text)
 
-# Webhook
 @app.route("/callback", methods=["POST"])
 def callback():
     data = request.get_json()
-    print("Received:", data)  # 👈 一定要有這行
-    events = data.get("events", [])
+    print("=== LINE Webhook Triggered ===")
+    print(json.dumps(data, indent=2, ensure_ascii=False))
 
+    events = data.get("events", [])
     for event in events:
         if event.get("type") == "message" and event["message"]["type"] == "text":
             user_id = event["source"]["userId"]
             reply_token = event["replyToken"]
             user_msg = event["message"]["text"]
 
-            # 啟動小遊戲
+            # 啟動遊戲
             if "品牌診斷小遊戲" in user_msg.strip():
                 user_answers[user_id] = {"step": 1, "answers": []}
                 q = questions["Q1"]
@@ -80,7 +80,7 @@ def callback():
                 }])
                 continue
 
-            # 處理答題
+            # 回答處理
             if user_id in user_answers:
                 step = user_answers[user_id]["step"]
                 try:
@@ -101,22 +101,19 @@ def callback():
                         }
                     }])
                 else:
-                    # 全部答完，計算結果
-                    answers = user_answers[user_id]["answers"]
-                    result_type, recommendation = calculate_result(answers)
+                    result_type, recommendation = calculate_result(user_answers[user_id]["answers"])
                     reply_line(reply_token, [{
                         "type":"text",
                         "text": f"🎉 品牌診斷完成！\n\n結果: {result_type}\n建議: {recommendation}"
                     }])
-                    # 清除暫存
                     del user_answers[user_id]
 
     return "OK", 200
 
-# 測試根目錄
 @app.route("/")
 def index():
     return "Flask app is running", 200
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
