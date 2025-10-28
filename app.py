@@ -10,7 +10,7 @@ load_dotenv()
 app = Flask(__name__)
 
 # LINE 設定
-LINE_TOKEN = os.getenv("LINE_CHANNEL_TOKEN")
+LINE_TOKEN = os.getenv("LINE_TOKEN")
 LINE_API = "https://api.line.me/v2/bot/message/reply"
 
 # 小遊戲題目與 QuickReply 選項
