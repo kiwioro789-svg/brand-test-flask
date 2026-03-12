@@ -2,10 +2,12 @@ import os
 import json
 import requests
 from flask import Flask, request, abort, render_template, jsonify
+
+# 【修正點 1：使用正確的 v3 物件名稱 TextMessage, FlexMessage, QuickReplyItem】
 from linebot.v3.messaging import (
     Configuration, ApiClient, MessagingApi, PushMessageRequest, 
-    TextSendMessage, ReplyMessageRequest, QuickReply, QuickReplyButton, 
-    MessageAction, FlexSendMessage
+    TextMessage, ReplyMessageRequest, QuickReply, QuickReplyItem, 
+    MessageAction, FlexMessage
 )
 from linebot.v3.webhooks import MessageEvent, TextMessageContent
 from linebot.v3.webhook import WebhookHandler
@@ -17,7 +19,7 @@ load_dotenv()
 app = Flask(__name__)
 
 # ==========================================
-# 1. 環境變數設定 (Render 會自動抓取)
+# 1. 環境變數設定 
 # ==========================================
 access_token = os.getenv('CHANNEL_ACCESS_TOKEN')
 channel_secret = os.getenv('CHANNEL_SECRET')
@@ -71,7 +73,6 @@ def send_to_notion(name, phone, user_id, project):
         "Notion-Version": "2022-06-28"
     }
     
-    # 確保 Notion 表格裡有這四個欄位且名稱一模一樣
     data = {
         "parent": {"database_id": notion_db_id},
         "properties": {
@@ -102,7 +103,6 @@ def send_to_notion(name, phone, user_id, project):
 # ==========================================
 @app.route('/liff/form')
 def liff_form():
-    # 將 LIFF ID 傳給 templates/liff_form.html
     return render_template('liff_form.html', liff_id=liff_id)
 
 @app.route('/api/submit_form', methods=['POST'])
@@ -113,13 +113,12 @@ def submit_form():
     phone = data.get('phone', '未填寫')
     project = data.get('project', '未選擇')
 
-    # 將資料打進 Notion
     success = send_to_notion(name, phone, user_id, project)
 
     if success:
-        # 成功後推播訊息給客戶
         try:
-            success_msg = TextSendMessage(
+            # 【修正點 2：使用 TextMessage】
+            success_msg = TextMessage(
                 text=f"🎉 報名成功！\n\n已收到您的需求：\n姓名：{name}\n電話：{phone}\n項目：{project}\n\n我們將盡快與您聯繫！"
             )
             messaging_api.push_message(PushMessageRequest(to=user_id, messages=[success_msg]))
@@ -158,34 +157,33 @@ def handle_message(event):
         try:
             ans_index = questions[f"Q{step}"]["options"].index(msg) + 1
         except ValueError:
-            ans_index = 0  # 不在選項內
+            ans_index = 0  
 
         user_answers[user_id]["answers"].append(ans_index)
         step += 1
         user_answers[user_id]["step"] = step
 
-        # 還沒問完，繼續問下一題
         if step <= 6:
             q = questions[f"Q{step}"]
-            buttons = [QuickReplyButton(action=MessageAction(label=opt[:20], text=opt)) for opt in q["options"]]
+            # 【修正點 3：使用 QuickReplyItem】
+            buttons = [QuickReplyItem(action=MessageAction(label=opt[:20], text=opt)) for opt in q["options"]]
             qr = QuickReply(items=buttons)
             
             messaging_api.reply_message(
-                ReplyMessageRequest(reply_token=reply_token, messages=[TextSendMessage(text=q["text"], quick_reply=qr)])
+                ReplyMessageRequest(reply_token=reply_token, messages=[TextMessage(text=q["text"], quick_reply=qr)])
             )
-        # 問完了，計算結果
         else:
             result_title, result_text = calculate_result(user_answers[user_id]["answers"])
-            del user_answers[user_id]  # 清除暫存
+            del user_answers[user_id] 
             
-            replay_qr = QuickReply(items=[QuickReplyButton(action=MessageAction(label="再玩一次", text="再玩一次"))])
+            replay_qr = QuickReply(items=[QuickReplyItem(action=MessageAction(label="再玩一次", text="再玩一次"))])
             
             messaging_api.reply_message(
                 ReplyMessageRequest(
                     reply_token=reply_token,
                     messages=[
-                        TextSendMessage(text=f"🎉 品牌診斷完成！\n\n結果: {result_title}\n建議: {result_text}"),
-                        TextSendMessage(text="想要再玩一次嗎？", quick_reply=replay_qr)
+                        TextMessage(text=f"🎉 品牌診斷完成！\n\n結果: {result_title}\n建議: {result_text}"),
+                        TextMessage(text="想要再玩一次嗎？", quick_reply=replay_qr)
                     ]
                 )
             )
@@ -197,11 +195,11 @@ def handle_message(event):
     if "品牌診斷" in msg or msg == "再玩一次":
         user_answers[user_id] = {"step": 1, "answers": []}
         q = questions["Q1"]
-        buttons = [QuickReplyButton(action=MessageAction(label=opt[:20], text=opt)) for opt in q["options"]]
+        buttons = [QuickReplyItem(action=MessageAction(label=opt[:20], text=opt)) for opt in q["options"]]
         qr = QuickReply(items=buttons)
         
         messaging_api.reply_message(
-            ReplyMessageRequest(reply_token=reply_token, messages=[TextSendMessage(text=q["text"], quick_reply=qr)])
+            ReplyMessageRequest(reply_token=reply_token, messages=[TextMessage(text=q["text"], quick_reply=qr)])
         )
         return
 
@@ -210,13 +208,13 @@ def handle_message(event):
     # ----------------------------------------
     if "選單" in msg or "功能" in msg or "測試" in msg:
         quick_reply_buttons = [
-            QuickReplyButton(action=MessageAction(label="📝 我要報名", text="我要報名")),
-            QuickReplyButton(action=MessageAction(label="🎮 品牌診斷", text="品牌診斷小遊戲")),
-            QuickReplyButton(action=MessageAction(label="💰 價目表", text="價目表"))
+            QuickReplyItem(action=MessageAction(label="📝 我要報名", text="我要報名")),
+            QuickReplyItem(action=MessageAction(label="🎮 品牌診斷", text="品牌診斷小遊戲")),
+            QuickReplyItem(action=MessageAction(label="💰 價目表", text="價目表"))
         ]
         qr = QuickReply(items=quick_reply_buttons)
         messaging_api.reply_message(
-            ReplyMessageRequest(reply_token=reply_token, messages=[TextSendMessage(text="請選擇您需要的服務：", quick_reply=qr)])
+            ReplyMessageRequest(reply_token=reply_token, messages=[TextMessage(text="請選擇您需要的服務：", quick_reply=qr)])
         )
         return
 
@@ -227,13 +225,14 @@ def handle_message(event):
         try:
             with open('flex_templates/price.json', 'r', encoding='utf-8') as f:
                 flex_data = json.load(f)
+            # 【修正點 4：使用 FlexMessage】
             messaging_api.reply_message(
-                ReplyMessageRequest(reply_token=reply_token, messages=[FlexSendMessage(alt_text="這是價目表", contents=flex_data)])
+                ReplyMessageRequest(reply_token=reply_token, messages=[FlexMessage(alt_text="這是價目表", contents=flex_data)])
             )
         except Exception as e:
             print(f"Flex讀取錯誤: {e}")
             messaging_api.reply_message(
-                ReplyMessageRequest(reply_token=reply_token, messages=[TextSendMessage(text="目前無法讀取卡片喔！請確認檔案是否存在。")])
+                ReplyMessageRequest(reply_token=reply_token, messages=[TextMessage(text="目前無法讀取卡片喔！請確認檔案是否存在。")])
             )
         return
 
@@ -243,11 +242,10 @@ def handle_message(event):
     messaging_api.reply_message(
         ReplyMessageRequest(
             reply_token=reply_token,
-            messages=[TextSendMessage(text=f"收到您的訊息：「{msg}」\n您可以輸入「選單」來查看所有功能！")]
+            messages=[TextMessage(text=f"收到您的訊息：「{msg}」\n您可以輸入「選單」來查看所有功能！")]
         )
     )
 
 if __name__ == "__main__":
-    # Render 會自動指定 PORT
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=True)
