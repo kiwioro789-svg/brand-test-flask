@@ -1,177 +1,180 @@
-from flask import Flask, request
-import requests
 import os
 import json
+import requests
+from flask import Flask, request, abort, render_template, jsonify
+from linebot.v3.messaging import (
+    Configuration, ApiClient, MessagingApi, PushMessageRequest, 
+    TextMessage, ReplyMessageRequest, QuickReply, QuickReplyItem, 
+    MessageAction, FlexMessage
+)
+from linebot.v3.webhooks import MessageEvent, TextMessageContent
+from linebot.v3.webhook import WebhookHandler
+from linebot.v3.exceptions import InvalidSignatureError
 from dotenv import load_dotenv
 
-# 載入 .env
 load_dotenv()
 
 app = Flask(__name__)
 
-# LINE 設定
-LINE_TOKEN = os.getenv("LINE_TOKEN")
-LINE_API = "https://api.line.me/v2/bot/message/reply"
+# ==========================================
+# 1. 配置環境變數 (已將 CHANNEL_ACCESS_TOKEN 改為 LINE_TOKEN)
+# ==========================================
+line_token = os.getenv('LINE_TOKEN') # 改名處
+channel_secret = os.getenv('CHANNEL_SECRET')
+liff_id = os.getenv('LIFF_ID')
+notion_token = os.getenv('NOTION_TOKEN')
+notion_db_id = os.getenv('NOTION_DATABASE_ID')
 
-# 六題小遊戲題目
+# 注意這裡也要對應變數名稱 line_token
+configuration = Configuration(access_token=line_token) 
+api_client = ApiClient(configuration)
+messaging_api = MessagingApi(api_client)
+handler = WebhookHandler(channel_secret)
+
+# ==========================================
+# 2. 品牌診斷小遊戲設定 (同前)
+# ==========================================
 questions = {
-    "Q1": {
-        "text": "💭 Q1. 如果你的品牌是一個人，他會是：",
-        "options": [
-            "剛畢業的新鮮人，充滿熱血",
-            "熱愛社交的創意人",
-            "冷靜理性的專業人士",
-            "成熟穩重、有魅力的領導者"
-        ]
-    },
-    "Q2": {
-        "text": "🎨 Q2. 你的品牌色系更接近哪一種？",
-        "options": [
-            "柔和白灰，乾淨簡約",
-            "暖橘粉，溫暖有故事",
-            "高飽和色，創意滿滿",
-            "黑金配色，質感高端"
-        ]
-    },
-    "Q3": {
-        "text": "🚀 Q3. 當你在經營品牌時，最享受的瞬間是？",
-        "options": [
-            "客人第一次認識品牌",
-            "設計或拍攝時的創作過程",
-            "收到正面回饋",
-            "看見品牌越來越有影響力"
-        ]
-    },
-    "Q4": {
-        "text": "💬 Q4. 若品牌有一句 slogan，你會選哪種語氣？",
-        "options": [
-            "一步一腳印，從零開始",
-            "用故事溫暖市場",
-            "做自己風格的主角",
-            "讓專業說話"
-        ]
-    },
-    "Q5": {
-        "text": "✨ Q5. 你的品牌最需要的超能力是？",
-        "options": [
-            "讓人一眼記住的視覺感",
-            "感動人心的內容力",
-            "自動吸引客戶的行銷力",
-            "穩定發展的策略力"
-        ]
-    },
-    "Q6": {
-        "text": "🗺️ Q6. 如果品牌是一場旅程，現在你覺得自己在哪？",
-        "options": [
-            "剛整理行李，準備出發",
-            "走在途中，開始有風景",
-            "已達到第一個目的地",
-            "正在規劃下一趟旅程"
-        ]
-    }
+    "Q1": {"text": "💭 Q1. 如果你的品牌是一個人，他會是：", "options": ["熱血新鮮人", "創意人", "專業人士", "領導者"]},
+    "Q2": {"text": "🎨 Q2. 你的品牌色系更接近哪一種？", "options": ["簡約白灰", "溫暖橘粉", "創意飽和色", "高端黑金"]},
+    "Q3": {"text": "🚀 Q3. 最享受的瞬間是？", "options": ["客戶認識我", "創作過程", "收到回饋", "品牌影響力"]},
+    "Q4": {"text": "💬 Q4. Slogan 語氣？", "options": ["踏實從零開始", "溫暖故事", "做主角", "專業說話"]},
+    "Q5": {"text": "✨ Q5. 最需要的超能力？", "options": ["一眼記住", "內容力", "行銷力", "策略力"]},
+    "Q6": {"text": "🗺️ Q6. 目前在哪個階段？", "options": ["準備出發", "開始有風景", "第一個目的地", "下一趟旅程"]}
 }
 
-# 對應品牌類型
 brand_types = [
-    ("🌱 創造型品牌", "你充滿熱情與想法，品牌剛萌芽。建議聚焦於品牌定位與清晰視覺形象，讓世界看到你的創意！"),
-    ("🌿 故事型品牌", "你重視情感與連結，品牌有故事與溫度。建議用影像與社群內容，建立品牌的真實感與人味。"),
-    ("🌳 風格型品牌", "你擁有明確的設計感與一致的風格。接下來可以透過網站與形象影片，提升專業與辨識度。"),
-    ("🌺 領導型品牌", "你的品牌成熟且有影響力。建議整合行銷策略，打造品牌聯名與高階市場價值。")
+    ("🌱 創造型", "建議聚焦視覺形象"), ("🌿 故事型", "建議強化內容連結"),
+    ("🌳 風格型", "建議提升專業辨識"), ("🌺 領導型", "建議整合行銷策略")
 ]
 
-# 暫存使用者答案
-user_answers = {}
+user_answers = {} 
 
-# 分數計算（每題 1~4 分）
 def calculate_result(answers):
-    score = sum([int(a) for a in answers])  # 最大 24 分
-    if score <= 6:
-        return brand_types[0]
-    elif score <= 12:
-        return brand_types[1]
-    elif score <= 18:
-        return brand_types[2]
-    else:
-        return brand_types[3]
+    score = sum([int(a) for a in answers])
+    if score <= 6: return brand_types[0]
+    elif score <= 12: return brand_types[1]
+    elif score <= 18: return brand_types[2]
+    else: return brand_types[3]
 
-def reply_line(reply_token, messages):
+# ==========================================
+# 3. Notion 寫入功能
+# ==========================================
+def send_to_notion(name, phone, user_id, project):
+    url = "https://api.notion.com/v1/pages"
     headers = {
+        "Authorization": f"Bearer {notion_token}",
         "Content-Type": "application/json",
-        "Authorization": f"Bearer {LINE_TOKEN}"
+        "Notion-Version": "2022-06-28"
     }
-    data = {"replyToken": reply_token, "messages": messages}
-    res = requests.post(LINE_API, headers=headers, json=data)
-    print("Reply status:", res.status_code, res.text)
+    data = {
+        "parent": {"database_id": notion_db_id},
+        "properties": {
+            "姓名": {"title": [{"text": {"content": name}}]},
+            "電話": {"rich_text": [{"text": {"content": phone}}]},
+            "LINE ID": {"rich_text": [{"text": {"content": user_id}}]},
+            "項目": {"rich_text": [{"text": {"content": project}}]}
+        }
+    }
+    response = requests.post(url, headers=headers, json=data)
+    return response.status_code == 200
 
-@app.route("/callback", methods=["POST"])
-def callback():
+# ==========================================
+# 4. LIFF 報名表單路由
+# ==========================================
+@app.route('/liff/form')
+def liff_form():
+    return render_template('liff_form.html', liff_id=liff_id)
+
+@app.route('/api/submit_form', methods=['POST'])
+def submit_form():
     data = request.get_json()
-    print("=== LINE Webhook Triggered ===")
-    print(json.dumps(data, indent=2, ensure_ascii=False))
+    user_id = data.get('userId')
+    name = data.get('name')
+    phone = data.get('phone')
+    project = data.get('project')
 
-    events = data.get("events", [])
-    for event in events:
-        if event.get("type") == "message" and event["message"]["type"] == "text":
-            user_id = event["source"]["userId"]
-            reply_token = event["replyToken"]
-            user_msg = event["message"]["text"].strip()
+    if send_to_notion(name, phone, user_id, project):
+        try:
+            msg = TextMessage(text=f"🎉 報名成功！\n姓名：{name}\n項目：{project}\n我們將儘速聯繫您！")
+            messaging_api.push_message(PushMessageRequest(to=user_id, messages=[msg]))
+        except: pass
+        return jsonify({"status": "success"})
+    return jsonify({"status": "error"}), 500
 
-            # 啟動遊戲
-            if "品牌診斷小遊戲" in user_msg or user_msg == "再玩一次":
-                user_answers[user_id] = {"step": 1, "answers": []}
-                q = questions["Q1"]
-                reply_line(reply_token, [{
-                    "type":"text",
-                    "text": q["text"],
-                    "quickReply": {
-                        "items":[{"type":"action","action":{"type":"message","label":opt,"text":opt}} for opt in q["options"]]
-                    }
-                }])
-                continue
+# ==========================================
+# 5. LINE 訊息處理
+# ==========================================
+@app.route("/callback", methods=['POST'])
+def callback():
+    signature = request.headers['X-Line-Signature']
+    body = request.get_data(as_text=True)
+    try:
+        handler.handle(body, signature)
+    except InvalidSignatureError:
+        abort(400)
+    return 'OK'
 
-            # 回答處理
-            if user_id in user_answers:
-                step = user_answers[user_id]["step"]
-                try:
-                    ans_index = questions[f"Q{step}"]["options"].index(user_msg) + 1
-                except ValueError:
-                    ans_index = 0  # 不在選項內
-                user_answers[user_id]["answers"].append(ans_index)
-                step += 1
-                user_answers[user_id]["step"] = step
+@handler.add(MessageEvent, message=TextMessageContent)
+def handle_message(event):
+    msg = event.message.text.strip()
+    user_id = event.source.user_id
+    reply_token = event.reply_token
 
-                if step <= 6:
-                    q = questions[f"Q{step}"]
-                    reply_line(reply_token, [{
-                        "type":"text",
-                        "text": q["text"],
-                        "quickReply": {
-                            "items":[{"type":"action","action":{"type":"message","label":opt,"text":opt}} for opt in q["options"]]
-                        }
-                    }])
-                else:
-                    result_title, result_text = calculate_result(user_answers[user_id]["answers"])
-                    reply_line(reply_token, [
-                        {
-                            "type":"text",
-                            "text": f"🎉 品牌診斷完成！\n\n結果: {result_title}\n建議: {result_text}"
-                        },
-                        {
-                            "type":"text",
-                            "text": "想要再玩一次嗎？",
-                            "quickReply": {
-                                "items":[{"type":"action","action":{"type":"message","label":"再玩一次","text":"再玩一次"}}]
-                            }
-                        }
-                    ])
-                    del user_answers[user_id]
+    if msg in ["選單", "功能", "我要報名"]:
+        if user_id in user_answers: del user_answers[user_id]
+        
+        if msg == "我要報名":
+            return messaging_api.reply_message(ReplyMessageRequest(
+                reply_token=reply_token, 
+                messages=[TextMessage(text=f"請點擊選單或網址開啟報名表：\nhttps://liff.line.me/{liff_id}")]
+            ))
+            
+        qr = QuickReply(items=[
+            QuickReplyItem(action=MessageAction(label="📝 我要報名", text="我要報名")),
+            QuickReplyItem(action=MessageAction(label="🎮 品牌診斷", text="品牌診斷")),
+            QuickReplyItem(action=MessageAction(label="💰 價目表", text="價目表"))
+        ])
+        return messaging_api.reply_message(ReplyMessageRequest(
+            reply_token=reply_token, 
+            messages=[TextMessage(text="請選擇服務：", quick_reply=qr)]
+        ))
 
-    return "OK", 200
+    if msg == "品牌診斷" or msg == "再玩一次":
+        user_answers[user_id] = {"step": 1, "answers": []}
+        q = questions["Q1"]
+        qr = QuickReply(items=[QuickReplyItem(action=MessageAction(label=o[:20], text=o)) for o in q["options"]])
+        return messaging_api.reply_message(ReplyMessageRequest(
+            reply_token=reply_token, messages=[TextMessage(text=q["text"], quick_reply=qr)]
+        ))
 
-@app.route("/")
-def index():
-    return "Flask app is running", 200
+    if user_id in user_answers:
+        step = user_answers[user_id]["step"]
+        try:
+            ans_index = questions[f"Q{step}"]["options"].index(msg) + 1
+            user_answers[user_id]["answers"].append(ans_index)
+            user_answers[user_id]["step"] += 1
+            step = user_answers[user_id]["step"]
+            
+            if step <= 6:
+                q = questions[f"Q{step}"]
+                qr = QuickReply(items=[QuickReplyItem(action=MessageAction(label=o[:20], text=o)) for o in q["options"]])
+                return messaging_api.reply_message(ReplyMessageRequest(
+                    reply_token=reply_token, messages=[TextMessage(text=q["text"], quick_reply=qr)]
+                ))
+            else:
+                res, advice = calculate_result(user_answers[user_id]["answers"])
+                del user_answers[user_id]
+                return messaging_api.reply_message(ReplyMessageRequest(
+                    reply_token=reply_token, 
+                    messages=[TextMessage(text=f"結果：{res}\n{advice}"), TextMessage(text="想了解更多？輸入『選單』。")]
+                ))
+        except:
+            del user_answers[user_id]
+
+    messaging_api.reply_message(ReplyMessageRequest(
+        reply_token=reply_token, messages=[TextMessage(text="輸入『選單』查看更多功能。")]
+    ))
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
