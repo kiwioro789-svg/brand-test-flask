@@ -1,11 +1,10 @@
 import os
-import json
 import requests
 from flask import Flask, request, abort, render_template, jsonify
 from linebot.v3.messaging import (
     Configuration, ApiClient, MessagingApi, PushMessageRequest, 
     TextMessage, ReplyMessageRequest, QuickReply, QuickReplyItem, 
-    MessageAction, FlexMessage
+    MessageAction
 )
 from linebot.v3.webhooks import MessageEvent, TextMessageContent
 from linebot.v3.webhook import WebhookHandler
@@ -17,22 +16,21 @@ load_dotenv()
 app = Flask(__name__)
 
 # ==========================================
-# 1. 配置環境變數 (已將 CHANNEL_ACCESS_TOKEN 改為 LINE_TOKEN)
+# 1. 配置環境變數
 # ==========================================
-line_token = os.getenv('LINE_TOKEN') # 改名處
+line_token = os.getenv('LINE_TOKEN') 
 channel_secret = os.getenv('CHANNEL_SECRET')
 liff_id = os.getenv('LIFF_ID')
 notion_token = os.getenv('NOTION_TOKEN')
 notion_db_id = os.getenv('NOTION_DATABASE_ID')
 
-# 注意這裡也要對應變數名稱 line_token
 configuration = Configuration(access_token=line_token) 
 api_client = ApiClient(configuration)
 messaging_api = MessagingApi(api_client)
 handler = WebhookHandler(channel_secret)
 
 # ==========================================
-# 2. 品牌診斷小遊戲設定 (同前)
+# 2. 品牌診斷小遊戲設定
 # ==========================================
 questions = {
     "Q1": {"text": "💭 Q1. 如果你的品牌是一個人，他會是：", "options": ["熱血新鮮人", "創意人", "專業人士", "領導者"]},
@@ -77,6 +75,8 @@ def send_to_notion(name, phone, user_id, project):
         }
     }
     response = requests.post(url, headers=headers, json=data)
+    if response.status_code != 200:
+        print(f"Notion Error: {response.text}")
     return response.status_code == 200
 
 # ==========================================
@@ -121,25 +121,26 @@ def handle_message(event):
     user_id = event.source.user_id
     reply_token = event.reply_token
 
-    if msg in ["選單", "功能", "我要報名"]:
+    # 邏輯 A：重置與總選單 (移除價目表)
+    if msg in ["選單", "功能", "我要報名", "測試"]:
         if user_id in user_answers: del user_answers[user_id]
         
         if msg == "我要報名":
             return messaging_api.reply_message(ReplyMessageRequest(
                 reply_token=reply_token, 
-                messages=[TextMessage(text=f"請點擊選單或網址開啟報名表：\nhttps://liff.line.me/{liff_id}")]
+                messages=[TextMessage(text=f"請點擊下方網址開啟報名表：\nhttps://liff.line.me/{liff_id}")]
             ))
             
         qr = QuickReply(items=[
             QuickReplyItem(action=MessageAction(label="📝 我要報名", text="我要報名")),
-            QuickReplyItem(action=MessageAction(label="🎮 品牌診斷", text="品牌診斷")),
-            QuickReplyItem(action=MessageAction(label="💰 價目表", text="價目表"))
+            QuickReplyItem(action=MessageAction(label="🎮 品牌診斷", text="品牌診斷"))
         ])
         return messaging_api.reply_message(ReplyMessageRequest(
             reply_token=reply_token, 
-            messages=[TextMessage(text="請選擇服務：", quick_reply=qr)]
+            messages=[TextMessage(text="請選擇您需要的服務：", quick_reply=qr)]
         ))
 
+    # 邏輯 B：啟動小遊戲
     if msg == "品牌診斷" or msg == "再玩一次":
         user_answers[user_id] = {"step": 1, "answers": []}
         q = questions["Q1"]
@@ -148,6 +149,7 @@ def handle_message(event):
             reply_token=reply_token, messages=[TextMessage(text=q["text"], quick_reply=qr)]
         ))
 
+    # 邏輯 C：遊戲進行中
     if user_id in user_answers:
         step = user_answers[user_id]["step"]
         try:
@@ -172,8 +174,9 @@ def handle_message(event):
         except:
             del user_answers[user_id]
 
+    # 預設回覆
     messaging_api.reply_message(ReplyMessageRequest(
-        reply_token=reply_token, messages=[TextMessage(text="輸入『選單』查看更多功能。")]
+        reply_token=reply_token, messages=[TextMessage(text="收到訊息！請輸入『選單』來查看功能。")]
     ))
 
 if __name__ == "__main__":
