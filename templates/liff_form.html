@@ -7,40 +7,37 @@
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <script charset="utf-8" src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
     <style>
-        body { background-color: #f8f9fa; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }
+        body { background-color: #f8f9fa; font-family: sans-serif; }
         .container { max-width: 500px; margin-top: 30px; }
         .card { border-radius: 20px; border: none; box-shadow: 0 10px 25px rgba(0,0,0,0.05); }
         .header-bg { background-color: #06c755; color: white; border-radius: 20px 20px 0 0; padding: 25px; text-align: center; }
-        .btn-submit { background-color: #06c755; color: white; border: none; border-radius: 12px; padding: 12px; font-weight: 600; width: 100%; transition: 0.3s; }
+        .btn-submit { background-color: #06c755; color: white; border: none; border-radius: 12px; padding: 12px; font-weight: 600; width: 100%; transition: 0.3s; margin-top: 15px; }
         .btn-submit:disabled { background-color: #ccc; }
-        .form-label { font-weight: 500; color: #495057; }
-        .form-control, .form-select { border-radius: 10px; padding: 12px; border: 1px solid #dee2e6; }
     </style>
 </head>
 <body>
 
-<div class="container">
+<div class="container mb-5">
     <div class="card">
         <div class="header-bg">
             <h4 class="mb-0">📝 預約您的專屬服務</h4>
-            <p class="mb-0 mt-2" style="font-size: 0.9rem; opacity: 0.9;">請填寫下方資訊，我們將儘速聯繫您</p>
         </div>
         <div class="card-body p-4">
             <form id="bookingForm">
                 <input type="hidden" id="userId">
-
+                
                 <div class="mb-3">
-                    <label for="name" class="form-label">姓名</label>
-                    <input type="text" class="form-control" id="name" placeholder="請輸入您的真實姓名" required>
+                    <label class="form-label">姓名</label>
+                    <input type="text" class="form-control" id="name" required>
                 </div>
-
+                
                 <div class="mb-3">
-                    <label for="phone" class="form-label">聯絡電話</label>
-                    <input type="tel" class="form-control" id="phone" placeholder="例如：0912345678" required>
+                    <label class="form-label">聯絡電話</label>
+                    <input type="tel" class="form-control" id="phone" required>
                 </div>
-
-                <div class="mb-4">
-                    <label for="project" class="form-label">需求項目</label>
+                
+                <div class="mb-3">
+                    <label class="form-label">需求項目</label>
                     <select class="form-select" id="project" required>
                         <option value="" disabled selected>請選擇服務項目</option>
                         <option value="網站">🌐 網站開發設計</option>
@@ -50,22 +47,46 @@
                     </select>
                 </div>
 
-                <button type="button" id="submitBtn" class="btn btn-submit" disabled>正在載入 LINE 資訊...</button>
+                <div class="mb-3">
+                    <label class="form-label">預約日期</label>
+                    <input type="date" class="form-control" id="date" required onchange="updateTimeSlots()">
+                </div>
+
+                <div class="mb-3">
+                    <label class="form-label">預約時段</label>
+                    <select class="form-select" id="time" required disabled>
+                        <option value="" disabled selected>請先選擇日期</option>
+                    </select>
+                </div>
+
+                <button type="button" id="submitBtn" class="btn btn-submit" disabled>載入資料中...</button>
             </form>
         </div>
     </div>
 </div>
 
 <script>
-    // 初始化 LIFF
-    async function initLIFF() {
+    let bookedSlots = [];
+    // 這裡可以自訂你每天開放的時段
+    const availableTimes = ["10:00", "13:00", "15:00", "17:00", "19:00"]; 
+
+    async function initSystem() {
         try {
+            // 1. 取得已經被預約的時段
+            const res = await fetch('/api/get_slots');
+            const data = await res.json();
+            bookedSlots = data.booked || [];
+
+            // 2. 初始化 LIFF
             await liff.init({ liffId: "{{ liff_id }}" });
             if (liff.isLoggedIn()) {
                 const profile = await liff.getProfile();
                 document.getElementById('userId').value = profile.userId;
                 
-                // 載入完成，啟用按鈕
+                // 設定日期只能選今天以後
+                const today = new Date().toISOString().split('T')[0];
+                document.getElementById('date').setAttribute('min', today);
+
                 const btn = document.getElementById('submitBtn');
                 btn.innerText = "確認送出預約";
                 btn.disabled = false;
@@ -74,21 +95,48 @@
                 liff.login();
             }
         } catch (err) {
-            console.error('LIFF 初始化失敗', err);
-            alert('請在 LINE 內開啟此網頁');
+            console.error(err);
+            alert('系統載入失敗，請在 LINE 內重新開啟');
         }
     }
 
-    // 處理表單送出
+    // 當日期改變時，更新下拉選單
+    function updateTimeSlots() {
+        const selectedDate = document.getElementById('date').value;
+        const timeSelect = document.getElementById('time');
+        
+        timeSelect.innerHTML = '<option value="" disabled selected>請選擇時段</option>';
+        if (!selectedDate) {
+            timeSelect.disabled = true;
+            return;
+        }
+
+        timeSelect.disabled = false;
+        
+        availableTimes.forEach(time => {
+            // 組合格式例如："2026-03-20_14:00" 來跟後端比對
+            const targetFormat = `${selectedDate}_${time}`;
+            const isBooked = bookedSlots.includes(targetFormat);
+            
+            const option = document.createElement('option');
+            option.value = time;
+            option.innerText = isBooked ? `${time} (已被預約)` : time;
+            if (isBooked) option.disabled = true;
+            
+            timeSelect.appendChild(option);
+        });
+    }
+
     async function handleSubmit() {
         const name = document.getElementById('name').value;
         const phone = document.getElementById('phone').value;
         const project = document.getElementById('project').value;
+        const date = document.getElementById('date').value;
+        const time = document.getElementById('time').value;
         const userId = document.getElementById('userId').value;
 
-        if (!name || !phone || !project) {
-            alert('請完整填寫所有欄位喔！');
-            return;
+        if (!name || !phone || !project || !date || !time) {
+            return alert('請完整填寫所有預約資訊喔！');
         }
 
         const btn = document.getElementById('submitBtn');
@@ -99,33 +147,23 @@
             const response = await fetch('/api/submit_form', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    userId: userId,
-                    name: name,
-                    phone: phone,
-                    project: project
-                })
+                body: JSON.stringify({ userId, name, phone, project, date, time })
             });
-
-            const result = await response.json();
-            if (result.status === "success") {
-                // 送出成功後關閉視窗
+            if ((await response.json()).status === "success") {
                 liff.closeWindow();
             } else {
-                alert('系統忙碌中，請稍後再試');
+                alert('伺服器忙碌中，請稍後再試');
                 btn.innerText = "確認送出預約";
                 btn.disabled = false;
             }
         } catch (error) {
-            console.error('送出失敗', error);
             alert('連線失敗，請檢查網路狀態');
             btn.innerText = "確認送出預約";
             btn.disabled = false;
         }
     }
-
-    window.onload = initLIFF;
+    
+    window.onload = initSystem;
 </script>
-
 </body>
 </html>
