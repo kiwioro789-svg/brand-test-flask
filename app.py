@@ -163,7 +163,7 @@ def handle_message(event):
     # 邏輯 D：預設自動彈出選單
     messaging_api.reply_message(ReplyMessageRequest(
         reply_token=reply_token, 
-        messages=[TextMessage(text="哈囉！請選擇您需要的服務：", quick_reply=default_qr)]
+        messages=[TextMessage(text="", quick_reply=default_qr)]
     ))
 
 if __name__ == "__main__":
