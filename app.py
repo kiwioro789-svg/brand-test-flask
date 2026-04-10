@@ -30,7 +30,7 @@ messaging_api = MessagingApi(api_client)
 handler = WebhookHandler(channel_secret)
 
 # ==========================================
-# 2. 品牌診斷小遊戲設定 (保持不變)
+# 2. 品牌診斷小遊戲設定
 # ==========================================
 questions = {
     "Q1": {"text": "💭 Q1. 如果你的品牌是一個人，他會是：", "options": ["熱血新鮮人", "創意人", "專業人士", "領導者"]},
@@ -51,30 +51,9 @@ def calculate_result(answers):
     else: return brand_types[3]
 
 # ==========================================
-# 3. Notion 讀寫功能 (新增讀取已預約時段)
+# 3. Notion 寫入功能 (極簡備註版)
 # ==========================================
-def get_booked_slots():
-    url = f"https://api.notion.com/v1/databases/{notion_db_id}/query"
-    headers = {
-        "Authorization": f"Bearer {notion_token}",
-        "Notion-Version": "2022-06-28"
-    }
-    response = requests.post(url, headers=headers)
-    if response.status_code != 200: return []
-    
-    booked = []
-    for page in response.json().get('results', []):
-        props = page.get('properties', {})
-        # 安全讀取日期與時段的純文字內容
-        try:
-            date_str = props.get('預約日期', {}).get('rich_text', [])[0]['text']['content']
-            time_str = props.get('預約時段', {}).get('rich_text', [])[0]['text']['content']
-            booked.append(f"{date_str}_{time_str}") # 格式例如：2026-03-20_14:00
-        except:
-            continue
-    return booked
-
-def send_to_notion(name, phone, user_id, project, date, time):
+def send_to_notion(name, phone, user_id, project, remarks):
     url = "https://api.notion.com/v1/pages"
     headers = {
         "Authorization": f"Bearer {notion_token}",
@@ -88,8 +67,7 @@ def send_to_notion(name, phone, user_id, project, date, time):
             "電話": {"rich_text": [{"text": {"content": phone}}]},
             "LINE ID": {"rich_text": [{"text": {"content": user_id}}]},
             "項目": {"rich_text": [{"text": {"content": project}}]},
-            "預約日期": {"rich_text": [{"text": {"content": date}}]},
-            "預約時段": {"rich_text": [{"text": {"content": time}}]}
+            "備註": {"rich_text": [{"text": {"content": remarks}}]}
         }
     }
     response = requests.post(url, headers=headers, json=data)
@@ -102,25 +80,16 @@ def send_to_notion(name, phone, user_id, project, date, time):
 def liff_form():
     return render_template('liff_form.html', liff_id=liff_id)
 
-@app.route('/api/get_slots', methods=['GET'])
-def fetch_slots():
-    slots = get_booked_slots()
-    return jsonify({"booked": slots})
-
 @app.route('/api/submit_form', methods=['POST'])
 def submit_form():
     data = request.get_json()
-    user_id = data.get('userId')
-    name = data.get('name')
-    phone = data.get('phone')
-    project = data.get('project')
-    date = data.get('date')
-    time = data.get('time')
-
-    if send_to_notion(name, phone, user_id, project, date, time):
+    if send_to_notion(
+        data.get('name'), data.get('phone'), data.get('userId'),
+        data.get('project'), data.get('remarks')
+    ):
         try:
-            msg = TextMessage(text=f"🎉 預約成功！\n姓名：{name}\n項目：{project}\n時間：{date} {time}\n我們將儘速聯繫您！")
-            messaging_api.push_message(PushMessageRequest(to=user_id, messages=[msg]))
+            msg = TextMessage(text=f"🎉 預約成功！\n姓名：{data.get('name')}\n項目：{data.get('project')}\n\n我們已經收到您的需求，將儘速與您聯繫！")
+            messaging_api.push_message(PushMessageRequest(to=data.get('userId'), messages=[msg]))
         except: pass
         return jsonify({"status": "success"})
     return jsonify({"status": "error"}), 500
@@ -142,21 +111,20 @@ def handle_message(event):
     user_id = event.source.user_id
     reply_token = event.reply_token
 
-    if any(keyword in msg for keyword in ["選單", "功能", "報名", "測試"]):
+    default_qr = QuickReply(items=[
+        QuickReplyItem(action=MessageAction(label="📝 我要預約", text="我要報名")),
+        QuickReplyItem(action=MessageAction(label="🎮 品牌診斷", text="品牌診斷"))
+    ])
+
+    # 邏輯 A：觸發報名表單
+    if "報名" in msg or "預約" in msg:
         if user_id in user_answers: del user_answers[user_id]
-        if "報名" in msg:
-            return messaging_api.reply_message(ReplyMessageRequest(
-                reply_token=reply_token, 
-                messages=[TextMessage(text=f"請點擊下方網址開啟預約表單：\nhttps://liff.line.me/{liff_id}")]
-            ))
-        qr = QuickReply(items=[
-            QuickReplyItem(action=MessageAction(label="📝 我要預約", text="我要報名")),
-            QuickReplyItem(action=MessageAction(label="🎮 品牌診斷", text="品牌診斷"))
-        ])
         return messaging_api.reply_message(ReplyMessageRequest(
-            reply_token=reply_token, messages=[TextMessage(text="請選擇您需要的服務：", quick_reply=qr)]
+            reply_token=reply_token, 
+            messages=[TextMessage(text=f"請點擊下方網址開啟預約表單：\nhttps://liff.line.me/{liff_id}")]
         ))
 
+    # 邏輯 B：啟動小遊戲
     if "診斷" in msg or "再玩" in msg:
         user_answers[user_id] = {"step": 1, "answers": []}
         q = questions["Q1"]
@@ -165,6 +133,7 @@ def handle_message(event):
             reply_token=reply_token, messages=[TextMessage(text=q["text"], quick_reply=qr)]
         ))
 
+    # 邏輯 C：遊戲進行中
     if user_id in user_answers:
         step = user_answers[user_id]["step"]
         try:
@@ -182,11 +151,20 @@ def handle_message(event):
                 res, advice = calculate_result(user_answers[user_id]["answers"])
                 del user_answers[user_id]
                 return messaging_api.reply_message(ReplyMessageRequest(
-                    reply_token=reply_token, messages=[TextMessage(text=f"結果：{res}\n{advice}"), TextMessage(text="想了解更多？輸入『選單』。")]
+                    reply_token=reply_token, 
+                    messages=[
+                        TextMessage(text=f"結果：{res}\n{advice}"), 
+                        TextMessage(text="接下來想做什麼呢？", quick_reply=default_qr)
+                    ]
                 ))
-        except: del user_answers[user_id]
+        except: 
+            del user_answers[user_id]
 
-    messaging_api.reply_message(ReplyMessageRequest(reply_token=reply_token, messages=[TextMessage(text="收到訊息！請輸入『選單』來查看功能。")]))
+    # 邏輯 D：預設自動彈出選單
+    messaging_api.reply_message(ReplyMessageRequest(
+        reply_token=reply_token, 
+        messages=[TextMessage(text="哈囉！請選擇您需要的服務：", quick_reply=default_qr)]
+    ))
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
