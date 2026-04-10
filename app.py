@@ -166,7 +166,7 @@ def handle_message(event):
     if msg in menu_keywords:
         return messaging_api.reply_message(ReplyMessageRequest(
             reply_token=reply_token, 
-            messages=[TextMessage(text=f"好的！關於「{msg}」，請選擇服務：", quick_reply=default_qr)]
+            messages=[TextMessage(text=f"{msg}", quick_reply=default_qr)]
         ))
 
     # 💡 邏輯 E：已讀不回
